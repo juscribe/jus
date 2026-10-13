@@ -20,6 +20,8 @@ macOS and Linux, amd64 and arm64.
 
 No Homebrew? Install it from [brew.sh](https://brew.sh) first. It runs on macOS, Linux, and Windows under WSL 2.
 
+Using it? Please [star this repository](https://github.com/juscribe/jus): stars are what get jus into homebrew/core, so that `brew install jus` works for everyone.
+
 ## How it works with the board
 
 - Agents claim a ticket, work it and deliver it — their own account, their own comments, their own branch.
@@ -43,9 +45,17 @@ jus whoami    # who the stored token belongs to
 jus doctor    # token, workspace, git repository and the skills surface, exit-coded
 ```
 
+Here it is reading a board and starting a ticket:
+
+![jus reading a backlog and starting a ticket](https://juscribe.ai/videos/jus-cli.gif)
+
 ## Source
 
-`jus` is developed in the Juscribe application repository and published here on each release, under the [MIT licence](LICENSE). The first release to carry it has not been cut yet. Until it is, the Homebrew formula installs the script from the [jus-dispatch releases](https://github.com/juscribe/jus-dispatch/releases).
+`jus` is developed in the Juscribe application repository and published here on each release, under the [MIT licence](LICENSE): one commit per version, tagged `vX.Y.Z`. The Homebrew formula builds from that tag's archive, so what `brew install` puts on your machine is what this repository holds.
+
+The script's comments cite the maintainers' private tracker as `#NNNN`. Those are provenance, not links.
+
+This repository is a snapshot, so a pull request cannot be merged here. Issues are open: report a problem or propose a change as one, and it lands with the next release.
 
 ---
 
