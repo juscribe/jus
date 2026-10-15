@@ -27,7 +27,7 @@ set -euo pipefail
 
 # Embedded version — stamped by script/dev/release-dispatch during builds.
 # In development, falls back to .jus/VERSION file.
-JUS_EMBEDDED_VERSION="0.8.30"
+JUS_EMBEDDED_VERSION="0.8.31"
 
 # Program name for usage strings — adapts to however the script was invoked
 PROG_NAME="$(basename "$0")"
@@ -1151,11 +1151,11 @@ print_status() {
 # it and 404. `spec/project/jus_api_workspace_path_spec.rb` reads the real
 # segments off the Rails route set and fails when one is missing here.
 JUS_TOPLEVEL_API_SEGMENTS=(
-  admin agent_releases api_tokens cli_session confirmation connected_apps dispatches
+  admin agent_releases api_tokens author_name cli_session community_themes confirmation connected_apps dispatches
   file_locations files guest_link_file_cookie invitation mailing_list
-  mobile_release mobile_session my notifications oauth_registration
-  organization_invitations organizations password plans profile registration schema
-  session site_announcements support_contact teams themes unlock versions waitlist
+  mobile_release mobile_session my my_themes notifications oauth_registration
+  organization_invitations organizations password plans profile public registration schema
+  session site_announcements support_contact teams theme_drafts theme_previews theme_versions themes unlock versions waitlist
   workspace_templates workspaces
 )
 
