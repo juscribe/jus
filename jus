@@ -27,7 +27,7 @@ set -euo pipefail
 
 # Embedded version — stamped by script/dev/release-dispatch during builds.
 # In development, falls back to .jus/VERSION file.
-JUS_EMBEDDED_VERSION="0.8.31"
+JUS_EMBEDDED_VERSION="0.8.32"
 
 # Program name for usage strings — adapts to however the script was invoked
 PROG_NAME="$(basename "$0")"
@@ -4468,9 +4468,17 @@ jus_claude_env_set() {
 # checked nothing and passed, and `jus refresh-hooks` found no manifest. The
 # skills tool is the one whose hook manifest is installed; with none, Cursor —
 # what "2" meant here, and a tool with no plugin of its own to ask about.
+#
+# ⚠️ CURSOR IS THE GUESS, SO IT GOES LAST (#5986). An installed hook manifest,
+# a registered Claude Code plugin and a git-tracked `.claude/skills/` copy
+# (#2195) are all evidence; Cursor with no manifest is not. Asked first, it
+# named Cursor for this repository, which links skills into its own tree and
+# runs Claude Code on its committed copy, and doctor then judged the missing
+# clone and said nothing was being enforced.
 jus_doctor_infer_choice() {
-  local project_root="$1" slug
+  local project_root="$1" slug linked=0
   if jus_doctor_skills_linked "${project_root}/.agents/skills"; then
+    linked=1
     for slug in "${JUS_TOOL_SLUGS[@]}"; do
       [[ "$(jus_sop_method "$slug")" == "skills" ]] || continue
       if jus_installed_manifest "$slug" "$project_root" >/dev/null; then
@@ -4478,14 +4486,13 @@ jus_doctor_infer_choice() {
         return 0
       fi
     done
-    printf 'cursor\n'
-    return 0
   fi
-  if jus_plugin_installed "$project_root"; then
+  if jus_committed_bundle_present "$project_root" || jus_plugin_installed "$project_root"; then
     printf 'claude\n'
     return 0
   fi
-  return 1
+  [[ "$linked" -eq 1 ]] || return 1
+  printf 'cursor\n'
 }
 
 # ── manifest staleness (#4421) ───────────────────────────────────────────────
@@ -5015,7 +5022,8 @@ cmd_doctor() {
   fi
 
   if [[ "$inferred" -eq 1 ]]; then
-    jus_ui_note "AI tool: not recorded; inferred from what is on disk."
+    # #5986. Named, so a wrong inference is visible rather than only its effects.
+    jus_ui_note "AI tool: not recorded; inferred $(jus_ai_tool_name "$choice") from what is on disk."
   else
     jus_ui_note "AI tool: $(jus_ai_tool_name "$choice")"
   fi
