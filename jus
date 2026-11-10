@@ -7,6 +7,7 @@
 #   bin/jus api METHOD /path [body]       REST API wrapper (replaces bin/api)
 #   bin/jus api METHOD /path @file.json   Body from file
 #   bin/jus api METHOD /path <<'EOF'      Body from heredoc/stdin
+#   bin/jus upload <path> <file>...       Attach files to a ticket or a project
 #   bin/jus download <url-path> <output>  Download ActiveStorage attachments
 #   bin/jus login [--no-browser|--token]  Sign in through the browser, or paste a token
 #   bin/jus whoami                        Show currently authenticated user
@@ -27,7 +28,7 @@ set -euo pipefail
 
 # Embedded version — stamped by script/dev/release-dispatch during builds.
 # In development, falls back to .jus/VERSION file.
-JUS_EMBEDDED_VERSION="0.8.32"
+JUS_EMBEDDED_VERSION="0.8.33"
 
 # Program name for usage strings — adapts to however the script was invoked
 PROG_NAME="$(basename "$0")"
@@ -1475,17 +1476,6 @@ sys.exit(1)
   local token
   token=$(resolve_token) || exit 1
 
-  # Client version for the X-Jus-Version header. Empty when this build carries
-  # neither an embedded version nor a VERSION file — the request still goes out,
-  # just unattributed.
-  local jus_version
-  jus_version=$(resolve_client_version)
-
-  # The agent running this call, for the X-Jus-Agent header (#4908). Empty when
-  # none is detected, and then the request goes out as it always did.
-  local jus_agent
-  jus_agent=$(resolve_reported_agent)
-
   local curl_args=(
     -sS
     -X "$method"
@@ -1493,17 +1483,10 @@ sys.exit(1)
     -H "Accept: application/json"
     -w "\n%{http_code}"
   )
-
-  if [[ -n "$jus_version" ]]; then
-    curl_args+=(-H "X-Jus-Version: $jus_version")
-  fi
-  if [[ -n "$jus_agent" ]]; then
-    curl_args+=(-H "X-Jus-Agent: $jus_agent")
-    local session_header
-    while IFS= read -r session_header; do
-      curl_args+=(-H "$session_header")
-    done < <(jus_session_headers "$jus_agent")
-  fi
+  local client_header
+  while IFS= read -r client_header; do
+    curl_args+=(-H "$client_header")
+  done < <(jus_client_headers)
 
   local url="${BASE_URL}${path}"
 
@@ -1550,15 +1533,7 @@ sys.exit(1)
   local failed=0
   http_status_ok "$http_code" || failed=1
 
-  if [[ -n "$response" ]]; then
-    if [[ "$raw" == true ]]; then
-      echo "$response"
-    elif command -v jq &>/dev/null; then
-      echo "$response" | jq . 2>/dev/null || echo "$response"
-    else
-      echo "$response"
-    fi
-  fi
+  jus_print_response "$raw" "$response"
 
   # AFTER the body, so nothing can interleave with the JSON contract (#4508).
   jus_maybe_warn_skills "$method" "$path"
@@ -1569,6 +1544,114 @@ sys.exit(1)
     jus_explain_workspace_404 "$token"
   fi
 
+  return $failed
+}
+
+# The headers that say which client sent a request, one per line for `-H`:
+# X-Jus-Version, then X-Jus-Agent (#4908) with that agent's session headers.
+# Either may be missing. A build with no version and a run with no agent
+# detected send the request unattributed, as they always did.
+jus_client_headers() {
+  local jus_version jus_agent
+  jus_version=$(resolve_client_version)
+  jus_agent=$(resolve_reported_agent)
+  [[ -z "$jus_version" ]] || printf 'X-Jus-Version: %s\n' "$jus_version"
+  [[ -n "$jus_agent" ]] || return 0
+  printf 'X-Jus-Agent: %s\n' "$jus_agent"
+  jus_session_headers "$jus_agent"
+}
+
+# A response body on stdout: as received with --raw, otherwise through jq when
+# it parses. Nothing for an empty body.
+jus_print_response() { # <raw: true|false> <body>
+  local raw="$1" response="$2"
+  [[ -n "$response" ]] || return 0
+  if [[ "$raw" == true ]] || ! command -v jq &>/dev/null; then
+    echo "$response"
+  else
+    echo "$response" | jq . 2>/dev/null || echo "$response"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: upload (#6086)
+# ---------------------------------------------------------------------------
+#
+# Attaches files to a ticket or a project: one `files[]` part per file, posted
+# to the attachments path, which resolves as `jus api` resolves one. It exists
+# so a skill never hands curl the token itself, which Claude's plugin
+# directory flags as reading a credential from the user's machine.
+#
+# Each file name goes inside double quotes, so a `;` or `,` in it is not read
+# as a curl form option. Inside them curl reads `\` and `"` as escapes, so
+# those two are escaped first.
+cmd_upload() {
+  local raw=false verbose=false
+  local args=()
+
+  for arg in "$@"; do
+    case "$arg" in
+      --raw) raw=true ;;
+      -v) verbose=true ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+
+  if [[ ${#args[@]} -lt 2 ]]; then
+    echo "Usage: $PROG_NAME upload [flags] <attachments-path> <file>..." >&2
+    echo "       $PROG_NAME upload /workspaces/{ws}/tickets/42/attachments .jus/tmp/screenshot.png" >&2
+    exit 1
+  fi
+
+  # As in cmd_api: the `&&` keeps a missing file from ending the script silently.
+  local stored_ws_id=""
+  [[ -f "$WORKSPACE_FILE" ]] && stored_ws_id=$(cat "$WORKSPACE_FILE")
+  local path
+  path=$(resolve_api_path "${args[0]}" "$stored_ws_id") || exit 1
+  [[ "$path" == /api/* ]] || path="/api/v1${path}"
+
+  local file name parts=()
+  for file in "${args[@]:1}"; do
+    if [[ ! -f "$file" ]]; then
+      echo "Error: File not found: $file" >&2
+      exit 1
+    fi
+    name="${file//\\/\\\\}"
+    parts+=(-F "files[]=@\"${name//\"/\\\"}\"")
+  done
+
+  local token
+  token=$(resolve_token) || exit 1
+
+  local curl_args=(-sS -H "Accept: application/json" -w "\n%{http_code}")
+  local client_header
+  while IFS= read -r client_header; do
+    curl_args+=(-H "$client_header")
+  done < <(jus_client_headers)
+
+  local url="${BASE_URL}${path}"
+  if [[ "$verbose" == true ]]; then
+    jus_ui_note ">>> POST $url" >&2
+    jus_ui_note ">>> Files: ${args[*]:1}" >&2
+  fi
+
+  # The auth config on the curl line itself, never in curl_args: see cmd_api.
+  local output curl_status=0
+  output=$(curl -K <(jus_curl_auth "$token") "${curl_args[@]}" "${parts[@]}" "$url") || curl_status=$?
+
+  local http_code response
+  http_code=$(echo "$output" | tail -1)
+  response=$(echo "$output" | sed '$d')
+
+  if transport_failed "$curl_status" "$http_code"; then
+    unreachable_message >&2
+    return 1
+  fi
+
+  print_status "$http_code"
+  local failed=0
+  http_status_ok "$http_code" || failed=1
+  jus_print_response "$raw" "$response"
   return $failed
 }
 
@@ -6658,6 +6741,7 @@ jus_print_usage() {
   echo ""
   echo "Commands:"
   jus_ui_note "api METHOD /path [body]   REST API calls"
+  jus_ui_note "upload <path> <file>...   Attach files to a ticket or a project"
   jus_ui_note "download <url> <output>   Download attachments"
   jus_ui_note "login                     Sign in through the browser (--token to paste one)"
   jus_ui_note "whoami                    Show current user"
@@ -6684,6 +6768,10 @@ case "${1:-}" in
   api)
     shift
     cmd_api "$@"
+    ;;
+  upload)
+    shift
+    cmd_upload "$@"
     ;;
   download)
     shift
