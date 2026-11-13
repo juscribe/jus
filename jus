@@ -28,7 +28,7 @@ set -euo pipefail
 
 # Embedded version — stamped by script/dev/release-dispatch during builds.
 # In development, falls back to .jus/VERSION file.
-JUS_EMBEDDED_VERSION="0.8.33"
+JUS_EMBEDDED_VERSION="0.8.34"
 
 # Program name for usage strings — adapts to however the script was invoked
 PROG_NAME="$(basename "$0")"
